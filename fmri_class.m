@@ -64,7 +64,10 @@ classdef fmri_class < handle
             else
                 error('Number of vertices does not match')
             end;
-            [self.surface_connectivity_list, self.surface_connectivity_matrix] = vertices_connectivity_fast(self.cortical_surface) ;
+            if isfield(self.cortical_surface, 'labels')
+                self.cortical_surface = rmfield(self.cortical_surface, 'labels');
+            end
+            [self.surface_connectivity_list, ~] = vertices_connectivity_fast(self.cortical_surface) ;
         end;
         
         function set_fmri_time_series(self, fmri_time_series_local, subject_id)
@@ -164,7 +167,7 @@ classdef fmri_class < handle
                         new_searching_vertices = potential_searching_vertices ;
                         all_searching_vertices = union(all_searching_vertices, new_searching_vertices) ;
                     end
-                    if length(all_searching_vertices) >= 50
+                    if length(all_searching_vertices) >= 100
                         new_atlas_cluster_label(all_searching_vertices) = new_number_of_clusters ;
                         vertices_already_relabel(all_searching_vertices) = true ;
                     else
@@ -423,6 +426,7 @@ classdef fmri_class < handle
             max_cluster_mean = 0;
             max_cluster_id = 0;
             for current_cluster = 1 : self.number_of_clusters
+                current_cluster_mean = 0 ;
                 tmp_z_score = self.task_z_scores{subject_id}{task_pair_id}(self.clusters_labels{subject_id} == current_cluster, :);
                 if ~ isempty(tmp_z_score)
                    current_cluster_mean = mean(tmp_z_score) ; 
@@ -439,14 +443,24 @@ classdef fmri_class < handle
             average_variance = tmp_z_score_variance ;
         end
         
-        function group_connectivity_variance = compute_group_connectivity_variance(self)
+        function group_connectivity_variance = validate_group_connectivity_variance(self)
             group_connectivity_matrix = zeros(self.number_of_clusters, self.number_of_clusters, self.number_of_subjects) ;
             for current_subject = 1 : self.number_of_subjects
-                self.compute_clusters_correlation_matrices(current_subject) ;
-                group_connectivity_matrix(:, :, current_subject) = self.clusters_correlation_matrices{current_subject} ;
+                clusters_time_series = zeros(self.number_of_clusters, self.number_of_time_samples) ;
+                for current_cluster = 1 : self.number_of_clusters
+                    if ~ isempty(self.clusters_labels{current_subject} == current_cluster)
+                        clusters_time_series(current_cluster, :) = mean(self.reference_data{current_subject}(self.clusters_labels{current_subject} == current_cluster, :), 1) ;
+                    end
+                end
+                if cond(group_connectivity_matrix(:, :, current_subject)) < 1e5
+                    group_connectivity_matrix(:, :, current_subject) = inv(corr(clusters_time_series')) ;
+                else
+                    group_connectivity_matrix(:, :, current_subject) = pinv(corr(clusters_time_series')) ;
+                end
+                group_connectivity_matrix(:, :, current_subject) = group_connectivity_matrix(:, :, current_subject) - diag(diag(group_connectivity_matrix(:, :, current_subject))) ;
             end
-            assemble_connectivity_variance = sum(sum(var(group_connectivity_matrix, 1, 3))) ;
-            group_connectivity_variance = assemble_connectivity_variance / self.number_of_clusters / self.number_of_clusters ;
+            group_connectivity_matrix(isnan(group_connectivity_matrix)) = 0;
+            group_connectivity_variance = sum(sum(var(group_connectivity_matrix, 1, 3))) ;
         end
                     
         function minqi_group_clustering(self, max_iterations, lambda1, lambda2)
